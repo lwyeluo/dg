@@ -150,20 +150,20 @@ public:
             case PSNodeType::CAST:
             case PSNodeType::LOAD:
             case PSNodeType::CALL_FUNCPTR:
-                operands.push_back(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
                 break;
             case PSNodeType::STORE:
-                operands.push_back(va_arg(args, PSNode *));
-                operands.push_back(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
                 break;
             case PSNodeType::MEMCPY:
-                operands.push_back(va_arg(args, PSNode *));
-                operands.push_back(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
                 offset = va_arg(args, uint64_t);
                 len = va_arg(args, uint64_t);
                 break;
             case PSNodeType::GEP:
-                operands.push_back(va_arg(args, PSNode *));
+                addOperand(va_arg(args, PSNode *));
                 offset = va_arg(args, uint64_t);
                 break;
             case PSNodeType::CONSTANT:
@@ -185,7 +185,7 @@ public:
                 op = va_arg(args, PSNode *);
                 // the operands are null terminated
                 while (op) {
-                    operands.push_back(op);
+                    addOperand(op);
                     op = va_arg(args, PSNode *);
                 }
                 break;
