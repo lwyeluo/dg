@@ -30,6 +30,8 @@ protected:
     std::vector<NodeT *> predecessors;
     // XXX: maybe we could use SmallPtrVector or something like that
     std::vector<NodeT *> operands;
+    // nodes that use this node
+    std::vector<NodeT *> users;
 
     // size of the memory
     size_t size;
@@ -95,6 +97,10 @@ public:
         return operands[idx];
     }
 
+    const std::vector<NodeT *>& getUsers() const {
+        return users;
+    }
+
     size_t getOperandsNum() const
     {
         return operands.size();
@@ -102,8 +108,14 @@ public:
 
     size_t addOperand(NodeT *n)
     {
+#ifdef DEBUG_ENABLED
+        for (NodeT *x : operands)
+            assert(x != n && "Operand added multiple times");
+#endif
         assert(n && "Passed nullptr as the operand");
         operands.push_back(n);
+        n->addUser(static_cast<NodeT *>(this));
+
         return operands.size();
     }
 
@@ -245,6 +257,18 @@ public:
     {
         return successors.size();
     }
+
+private:
+    void addUser(NodeT *nd) {
+#ifdef DEBUG_ENABLED
+        for (NodeT *x : users)
+            assert(x != nd && "User added multiple times");
+#endif // DEBUG_ENABLED
+
+        users.push_back(nd);
+    }
+
+
 };
 
 } // analysis
