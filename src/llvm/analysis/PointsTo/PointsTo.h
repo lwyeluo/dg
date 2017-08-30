@@ -147,14 +147,16 @@ public:
 
     PSNode *getPointsTo(const llvm::Value *val)
     {
-        PSNode *nd = getNode(val);
-        assert(nd && "Did not find node");
+        PSNode *nd = builder->getPointsTo(val);
+        // check whether this node has been merged
+        // and it has a representant
+        if (nd) {
+            auto it = equivalence_mapping.find(nd);
+            if (it != equivalence_mapping.end())
+                return it->second;
+        }
 
-        auto it = equivalence_mapping.find(nd);
-        if (it != equivalence_mapping.end())
-            return it->second;
-
-        return builder->getPointsTo(val);
+        return nd;
     }
 
     const std::unordered_map<const llvm::Value *, PSNodesSeq>&
