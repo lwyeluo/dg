@@ -1,7 +1,13 @@
+#ifndef _LLVM_DG_2DOT_H
+#define _LLVM_DG_2DOT_H
+
 #include <iostream>
 #include <ostream>
 #include <sstream>
 #include <string>
+
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/raw_os_ostream.h"
 
 #include "DG2Dot.h"
 #include "llvm/LLVMNode.h"
@@ -311,3 +317,4 @@ private:
 };
 } /* namespace debug */
 } /* namespace dg */
+#endif

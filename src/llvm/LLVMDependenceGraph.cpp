@@ -130,6 +130,7 @@ bool LLVMDependenceGraph::verify() const
 
 bool LLVMDependenceGraph::build(llvm::Module *m, llvm::Function *entry)
 {
+    constructedFunctions.clear();
     // get entry function if not given
     if (!entry)
         entry = m->getFunction("main");
@@ -732,8 +733,6 @@ static bool match_callsite_name(LLVMNode *callNode, const char *names[])
         if (!func)
             return false;
 
-        // otherwise we would have a subgraph
-        assert(func->size() == 0);
         return array_match(func->getName(), names);
     } else {
         // simply iterate over the subgraphs, get the entry node
