@@ -1347,6 +1347,7 @@ LLVMPointerSubgraphBuilder::buildInstruction(const llvm::Instruction& Inst)
         case Instruction::BitCast:
         case Instruction::SExt:
         case Instruction::ZExt:
+        case Instruction::FPExt:
             node = createCast(&Inst);
             break;
         case Instruction::PtrToInt:
