@@ -41,6 +41,20 @@ bool PSNode::addPointsToUnknownOffset(PSNode *target)
     return changed;
 }
 
+// Return true if it makes sense to dereference this pointer.
+// PTA is over-approximation, so this is a filter.
+static inline bool canBeDereferenced(const Pointer& ptr)
+{
+    if (!ptr.isValid() || ptr.isInvalidated() || ptr.isUnknown())
+        return false;
+
+    // if the pointer points to a function, we can not dereference it
+    if (ptr.target->getType() == PSNodeType::FUNCTION)
+        return false;
+
+    return true;
+}
+
 bool PointerAnalysis::processLoad(PSNode *node)
 {
     bool changed = false;
@@ -50,15 +64,14 @@ bool PointerAnalysis::processLoad(PSNode *node)
         return error(operand, "Load's operand has no points-to set");
 
     for (const Pointer& ptr : operand->pointsTo) {
-        // XXX: should this yield also UNKNOWN pointer
-        if (!ptr.isValid() || ptr.isInvalidated())
-            continue;
-
         if (ptr.isUnknown()) {
             // load from unknown pointer yields unknown pointer
             changed |= node->addPointsTo(UNKNOWN_MEMORY);
             continue;
         }
+
+        if (!canBeDereferenced(ptr))
+            continue;
 
         // find memory objects holding relevant points-to
         // information
@@ -154,7 +167,7 @@ bool PointerAnalysis::processMemcpy(PSNode *node)
     for (const Pointer& ptr : srcNode->pointsTo) {
         assert(ptr.target && "Got nullptr as target");
 
-        if (!ptr.isValid() || ptr.isInvalidated())
+        if (!canBeDereferenced(ptr))
             continue;
 
         srcObjects.clear();
@@ -169,7 +182,7 @@ bool PointerAnalysis::processMemcpy(PSNode *node)
         for (const Pointer& dptr : destNode->pointsTo) {
             assert(dptr.target && "Got nullptr as target");
 
-            if (!dptr.isValid() || dptr.isInvalidated())
+            if (!canBeDereferenced(dptr))
                 continue;
 
             destObjects.clear();
@@ -316,7 +329,7 @@ bool PointerAnalysis::processNode(PSNode *node)
             for (const Pointer& ptr : node->getOperand(1)->pointsTo) {
                 assert(ptr.target && "Got nullptr as target");
 
-                if (ptr.isNull())
+                if (!canBeDereferenced(ptr))
                     continue;
 
                 objects.clear();
@@ -328,6 +341,7 @@ bool PointerAnalysis::processNode(PSNode *node)
                 }
             }
             break;
+        case PSNodeType::INVALIDATE_OBJECT:
         case PSNodeType::FREE:
             break;
         case PSNodeType::INVALIDATE_LOCALS:
@@ -354,10 +368,13 @@ bool PointerAnalysis::processNode(PSNode *node)
             if (invalidate_nodes) {
                 for (PSNode *op : node->operands) {
                     for (const Pointer& ptr : op->pointsTo) {
+                        if (!canBeDereferenced(ptr))
+                            continue;
                         PSNodeAlloc *target = PSNodeAlloc::get(ptr.target);
                         assert(target && "Target is not memory allocation");
-                        if (!target->isHeap() && !target->isGlobal())
+                        if (!target->isHeap() && !target->isGlobal()) {
                             changed |= node->addPointsTo(INVALIDATED);
+                        }
                     }
                 }
             }

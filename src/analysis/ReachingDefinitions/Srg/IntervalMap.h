@@ -1,6 +1,7 @@
 #ifndef _DG_INTERVALSET_H
 #define _DG_INTERVALSET_H
 
+#include <algorithm>
 #include "analysis/Offset.h"
 #include "analysis/ReachingDefinitions/RDMap.h"
 
@@ -19,19 +20,11 @@ class Interval {
     T start;
     T len;
 
-    static inline T min(T a, T b) {
-        return a < b ? a : b;
-    }
-
-    static inline T max(T a, T b) {
-        return a > b ? a : b;
-    }
-
 public:
     Interval(T start, T len): start(start), len(len) {}
 
     bool isUnknown() const {
-        return start.isUnknown() || len == 0;
+        return start.isUnknown() || len.offset == 0;
     }
 
     bool overlaps(const Interval& other) const {
@@ -41,10 +34,13 @@ public:
     }
 
     bool isSubsetOf(const Interval& other) const {
-        return start >= other.start && start + len <= other.start + other.len;
+        return (start >= other.start) && (start + len <= other.start + other.len);
     }
 
     bool unite(const Interval& other) {
+        using std::min;
+        using std::max;
+
         if (isUnknown() || other.isUnknown())
             return false;
         if (overlaps(other) || start + len == other.start || other.start + other.len == start) {
@@ -60,13 +56,17 @@ public:
     T getStart() const {
         return start;
     }
-    
+
     T getLength() const {
         return len;
     }
 
 };
 
+/**
+ * Represents a set of disjoint intervals.
+ * DisjointIntervalSet::insert is the main functions, other functions are delegated to the underlying vector.
+ */
 class DisjointIntervalSet {
     std::vector<Interval> intervals;
 public:
@@ -79,6 +79,12 @@ public:
             insert(interval);
         }
     }
+
+    /**
+     * Inserts @interval to the set, maintaining the invariant that all intervals
+     * in the set are disjoint. That is, if @interval overlaps with @x, that is already in the set,
+     * @x is removed, @interval is united with @x and inserted to the set.
+     */
 
     void insert(Interval interval) {
         // find & remove all overlapping intervals
@@ -128,7 +134,7 @@ public:
  *
  * Template parameters:
  *  V - type of value stored against interval
- *  ReverseLookup - order of interval lookup in collect. 
+ *  ReverseLookup - order of interval lookup in collect.
  *          If ReverseLookup=true, search will start at the end, so last values will be returned first
  */
 template <typename V, bool ReverseLookup=true>
@@ -153,6 +159,68 @@ class IntervalMap {
     }
 
 public:
+
+    /**
+     * Modifies this interval map in a way such, that
+     * collecting using @ki or any of its sub-interval will produce empty vector.
+     * Existing intervals that intersect with @ki will have that intersection removed
+     * (possibly splitting up one interval into two)
+     */
+    void killOverlapping(const Interval& ki) {
+        if (ki.isUnknown())
+            return;
+
+        std::vector<std::pair<Interval, V>> to_add;
+        for (auto&& it = buckets.begin(); it != buckets.end(); ) {
+            Interval& interval = it->first;
+            V& v = it->second;
+
+            if (!interval.getLength().isUnknown() && !interval.isUnknown() && interval.overlaps(ki)) {
+                if (ki.isSubsetOf(interval)) {
+                    // @interval is split into 2 by @ki
+
+                    // calculate the left part
+                    Offset start = interval.getStart();
+                    Offset end = ki.getStart();
+                    auto new_int = Interval{start, end - start};
+                    if (new_int.getLength().offset > 0) {
+                        to_add.push_back(std::pair<Interval, V>(std::move(new_int), std::move(v)));
+                    }
+                    // calculate the right part
+                    start = ki.getStart() + ki.getLength();
+                    end = interval.getStart() + interval.getLength();
+                    new_int = Interval{start, end - start};
+                    if (new_int.getLength().offset > 0) {
+                        to_add.push_back(std::pair<Interval, V>(std::move(new_int), std::move(v)));
+                    }
+                } else if (!ki.isSubsetOf(interval) && !interval.isSubsetOf(ki)) {
+                    // calculate preserved interval
+                    Offset start, end;
+                    if (ki.getStart() <= interval.getStart()) {
+                        // ki is on the left
+                        start = ki.getStart() + ki.getLength();
+                        end = interval.getStart() + interval.getLength();
+                    } else {
+                        // ki is on the right
+                        start = interval.getStart();
+                        end = ki.getStart();
+                    }
+                    auto new_int = Interval{start, end - start};
+                    if (new_int.getLength().offset > 0) {
+                        to_add.push_back(std::pair<Interval, V>(std::move(new_int), std::move(v)));
+                    }
+                } // else kill the whole interval, which is done by erasing it from buckets vector
+                it = buckets.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        std::move(to_add.begin(), to_add.end(), std::back_inserter(buckets));
+    }
+
+    /**
+     * Adds a new mapping from @interval to @value.
+     */
     void add(Interval&& interval, const V& value) {
         //                                    move interval, copy value
         auto to_add = std::make_pair<Interval, V>(std::move(interval), V(value));
@@ -169,7 +237,7 @@ public:
      *      1 - key intervals that (partially) cover specified interval
      *      2 - true if @interval is fully covered by returned key interval set, false otherwise
      */
-    std::tuple<std::vector<V>, std::vector<Interval>, bool> 
+    std::tuple<std::vector<V>, std::vector<Interval>, bool>
         collect(const Interval& interval, const std::vector<detail::Interval>& covered) const {
 
         std::vector<V> result;
@@ -178,12 +246,13 @@ public:
 
         static_assert(ReverseLookup, "forward lookup in IntervalMap is not yet supported");
         for (auto it = buckets.rbegin(); it != buckets.rend(); ++it) {
-            if (interval.isUnknown() || it->first.isUnknown() || (it->first.overlaps(interval) && !isCovered(it->first, intervals))) {
+            if (interval.isUnknown() || it->first.isUnknown() || (it->first.overlaps(interval))) {
                 intervals.insert(it->first);
                 result.push_back(it->second);
                 is_covered = isCovered(interval, intervals);
             }
         }
+        is_covered = isCovered(interval, intervals);
 
         return std::tuple<std::vector<V>, std::vector<Interval>, bool>(std::move(result), std::move(intervals.moveVector()), is_covered);
     }

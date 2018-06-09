@@ -2,7 +2,6 @@
 #define _DG_ANALYSIS_POINTS_TO_WITH_INVALIDATE_H_
 
 #include <cassert>
-
 #include "PointsToFlowSensitive.h"
 
 namespace dg {
@@ -13,6 +12,7 @@ class PointsToWithInvalidate : public PointsToFlowSensitive
 {
     static bool canChangeMM(PSNode *n) {
         if (n->getType() == PSNodeType::FREE ||
+            n->getType() == PSNodeType::INVALIDATE_OBJECT ||
             n->getType() == PSNodeType::INVALIDATE_LOCALS)
             return true;
 
@@ -29,7 +29,7 @@ public:
     // this is an easy but not very efficient implementation,
     // works for testing
     PointsToWithInvalidate(PointerSubgraph *ps)
-    : PointsToFlowSensitive(ps) {}
+    : PointsToFlowSensitive(ps, true) {}
 
     bool beforeProcessed(PSNode *n) override
     {
@@ -62,13 +62,15 @@ public:
     {
         bool changed = false;
 
-        if (n->getType() == PSNodeType::INVALIDATE_LOCALS) {
+        if (n->getType() == PSNodeType::INVALIDATE_LOCALS)
             return handleInvalidateLocals(n);
-        } else if (n->getType() == PSNodeType::FREE) {
-            return handleFree(n);
-        }
+        if (n->getType() == PSNodeType::INVALIDATE_OBJECT)
+            return invalidateMemory(n);
+        if (n->getType() == PSNodeType::FREE)
+            return invalidateMemory(n);
 
         assert(n->getType() != PSNodeType::FREE &&
+               n->getType() != PSNodeType::INVALIDATE_OBJECT &&
                n->getType() != PSNodeType::INVALIDATE_LOCALS);
 
         PointsToSetT *strong_update = nullptr;
@@ -221,15 +223,15 @@ public:
         S1.swap(S);
     }
 
-    bool handleFree(PSNode *node) {
+    bool invalidateMemory(PSNode *node) {
         bool changed = false;
         for (PSNode *pred : node->getPredecessors()) {
-            changed |= handleFree(node, pred);
+            changed |= invalidateMemory(node, pred);
         }
         return changed;
     }
 
-    bool handleFree(PSNode *node, PSNode *pred)
+    bool invalidateMemory(PSNode *node, PSNode *pred)
     {
         bool changed = false;
 
@@ -297,4 +299,3 @@ public:
 } // namespace dg
 
 #endif // _DG_ANALYSIS_POINTS_TO_WITH_INVALIDATE_H_
-

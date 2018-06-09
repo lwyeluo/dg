@@ -395,7 +395,15 @@ RDNode *LLVMRDBuilderSemisparse::createLoad(const llvm::Instruction *Inst, RDBlo
     addNode(Inst, node);
     rb->append(node);
 
-    node->addUses(getPointsTo(LI->getPointerOperand(), rb));
+    std::vector<DefSite> uses = getPointsTo(LI->getPointerOperand(), rb);
+    for (auto& ds : uses) {
+        ds.len = getAllocatedSize(LI->getPointerOperand()->getType()->getPointerElementType(), DL);
+        if (ds.offset.isUnknown() || ds.len.offset == 0) {
+            ds.len = Offset::UNKNOWN;
+            ds.offset = 0;
+        }
+    }
+    node->addUses(std::move(uses));
 
     return node;
 }
@@ -408,9 +416,14 @@ RDNode *LLVMRDBuilderSemisparse::createStore(const llvm::Instruction *Inst, RDBl
 
     auto pts = getPointsTo(Inst->getOperand(1), rb);
     for (auto& ds : pts) {
-        bool strong = isStrongUpdate(Inst->getOperand(1), ds, rb);
-        if (!ds.offset.isUnknown())
+        bool strong = false;
+        if (!ds.offset.isUnknown() && ds.len.offset != 0) {
             ds.len = getAllocatedSize(Inst->getOperand(0)->getType(), DL);
+            strong = isStrongUpdate(Inst->getOperand(1), ds, rb);
+        } else {
+            ds.offset = 0;
+            ds.len = Offset::UNKNOWN;
+        }
         node->addDef(ds, strong);
     }
 

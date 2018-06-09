@@ -19,8 +19,8 @@ public:
 
     // this is an easy but not very efficient implementation,
     // works for testing
-    PointsToFlowSensitive(PointerSubgraph *ps)
-    : PointerAnalysis(ps, Offset::UNKNOWN, false)
+    PointsToFlowSensitive(PointerSubgraph *ps, bool invalidate = false)
+    : PointerAnalysis(ps, Offset::UNKNOWN, false, invalidate)
     {
         memoryMaps.reserve(ps->size() / 5);
     }
@@ -193,4 +193,3 @@ private:
 } // namespace dg
 
 #endif // _DG_ANALYSIS_POINTS_TO_FLOW_SENSITIVE_H_
-
