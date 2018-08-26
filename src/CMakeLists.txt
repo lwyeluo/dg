@@ -1,5 +1,4 @@
 if (LLVM_DG)
-
 set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR}/lib)
 
 add_library(LLVMdg MODULE
@@ -21,6 +20,9 @@ add_library(LLVMdg MODULE
            analysis/PointsTo/Pointer.cpp
            analysis/PointsTo/PointerAnalysis.cpp
            analysis/PointsTo/PointerSubgraphValidator.cpp
+           llvm/analysis/PointsTo/Calls.cpp
+           llvm/analysis/PointsTo/Constants.cpp
+           llvm/analysis/PointsTo/Instructions.cpp
            )
 
 target_compile_features(LLVMdg PRIVATE cxx_range_for cxx_auto_type)
@@ -51,9 +53,12 @@ install(FILES
        Node.h
        DESTINATION ${INCLUDE_DIR})
 install(FILES
-	ADT/Queue.h
-	ADT/DGContainer.h
-	DESTINATION ${INCLUDE_DIR}/ADT/)
+        ADT/Bits.h
+        ADT/Bitvector.h
+        ADT/DGContainer.h
+        ADT/NumberSet.h
+        ADT/Queue.h
+       DESTINATION ${INCLUDE_DIR}/ADT/)
 install(FILES
     analysis/Analysis.h
     analysis/BFS.h
@@ -72,14 +77,19 @@ install(FILES
         analysis/ControlExpression/ControlExpression.h
         DESTINATION ${INCLUDE_DIR}/analysis/ControlExpression/)
 install(FILES
-	analysis/PointsTo/PointerAnalysis.h
-	analysis/PointsTo/Pointer.h
-	analysis/PointsTo/PointerSubgraph.h
-	analysis/PointsTo/PointsToFlowInsensitive.h
-	analysis/PointsTo/PointsToFlowSensitive.h
-	analysis/PointsTo/PointsToWithInvalidate.h
-    analysis/PointsTo/PointerSubgraphValidator.h
-	DESTINATION ${INCLUDE_DIR}/analysis/PointsTo/)
+        analysis/PointsTo/MemoryObject.h
+        analysis/PointsTo/PointerAnalysis.h
+        analysis/PointsTo/Pointer.h
+        analysis/PointsTo/PointerSubgraph.h
+        analysis/PointsTo/PointerSubgraphOptimizations.h
+        analysis/PointsTo/PointerSubgraphValidator.h
+        analysis/PointsTo/PointsToFlowInsensitive.h
+        analysis/PointsTo/PointsToFlowSensitive.h
+        analysis/PointsTo/PointsToMapping.h
+        analysis/PointsTo/PointsToSet.h
+        analysis/PointsTo/PointsToWithInvalidate.h
+        analysis/PointsTo/PSNode.h
+        DESTINATION ${INCLUDE_DIR}/analysis/PointsTo/)
 install(FILES
 	analysis/ReachingDefinitions/ReachingDefinitions.h
 	analysis/ReachingDefinitions/RDMap.h
