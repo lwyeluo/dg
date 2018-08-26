@@ -19,6 +19,9 @@ add_library(LLVMdg MODULE
            analysis/PointsTo/Pointer.cpp
            analysis/PointsTo/PointerAnalysis.cpp
            analysis/PointsTo/PointerSubgraphValidator.cpp
+           llvm/analysis/PointsTo/Calls.cpp
+           llvm/analysis/PointsTo/Constants.cpp
+           llvm/analysis/PointsTo/Instructions.cpp
            )
 
 target_compile_features(LLVMdg PRIVATE cxx_range_for cxx_auto_type)
@@ -48,8 +51,11 @@ install(FILES
        Node.h
        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llvm-dg)
 install(FILES
-	ADT/Queue.h
-	ADT/DGContainer.h
+        ADT/Bits.h
+        ADT/Bitvector.h
+        ADT/DGContainer.h
+        ADT/NumberSet.h
+        ADT/Queue.h
 	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llvm-dg/ADT/)
 install(FILES
     analysis/Analysis.h
@@ -69,13 +75,18 @@ install(FILES
         analysis/ControlExpression/ControlExpression.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llvm-dg/analysis/ControlExpression)
 install(FILES
-	analysis/PointsTo/PointerAnalysis.h
-	analysis/PointsTo/Pointer.h
-	analysis/PointsTo/PointerSubgraph.h
-	analysis/PointsTo/PointsToFlowInsensitive.h
-	analysis/PointsTo/PointsToFlowSensitive.h
-	analysis/PointsTo/PointsToWithInvalidate.h
-    analysis/PointsTo/PointerSubgraphValidator.h
+        analysis/PointsTo/MemoryObject.h
+        analysis/PointsTo/PointerAnalysis.h
+        analysis/PointsTo/Pointer.h
+        analysis/PointsTo/PointerSubgraph.h
+        analysis/PointsTo/PointerSubgraphOptimizations.h
+        analysis/PointsTo/PointerSubgraphValidator.h
+        analysis/PointsTo/PointsToFlowInsensitive.h
+        analysis/PointsTo/PointsToFlowSensitive.h
+        analysis/PointsTo/PointsToMapping.h
+        analysis/PointsTo/PointsToSet.h
+        analysis/PointsTo/PointsToWithInvalidate.h
+        analysis/PointsTo/PSNode.h
 	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llvm-dg/analysis/PointsTo/)
 install(FILES
 	analysis/ReachingDefinitions/ReachingDefinitions.h
