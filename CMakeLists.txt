@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.12)
 project(dg)
 
 include(CTest)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 
 include_directories( ${CMAKE_CURRENT_SOURCE_DIR}/src )
 
@@ -63,16 +65,21 @@ if (LLVM_DG)
 	endif(LLVM_BUILD_PATH)
 
 	add_definitions(${LLVM_DEFINITIONS})
-
-	if (NOT ${LLVM_PACKAGE_VERSION} VERSION_LESS "3.5")
-		llvm_map_components_to_libnames(llvm_libs support core
-		                                irreader bitwriter analysis)
-	else()
-		llvm_map_components_to_libraries(llvm_libs support core
-		                                 irreader bitwriter analysis)
-	endif()
-
 	add_definitions(-DHAVE_LLVM)
+
+	if (${LLVM_PACKAGE_VERSION} VERSION_GREATER "3.4")
+		llvm_map_components_to_libnames(llvm_core core)
+		llvm_map_components_to_libnames(llvm_irreader irreader)
+		llvm_map_components_to_libnames(llvm_bitwriter bitwriter)
+		llvm_map_components_to_libnames(llvm_analysis analysis)
+		llvm_map_components_to_libnames(llvm_support support)
+	else()
+		llvm_map_components_to_libraries(llvm_core core)
+		llvm_map_components_to_libraries(llvm_irreader irreader)
+		llvm_map_components_to_libraries(llvm_bitwriter bitwriter)
+		llvm_map_components_to_libraries(llvm_analysis analysis)
+		llvm_map_components_to_libraries(llvm_support support)
+	endif()
 endif(LLVM_DG)
 
 if (ENABLE_CFG)
@@ -89,7 +96,13 @@ message(STATUS "Using compiler: ${CMAKE_CXX_COMPILER}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -std=c++11 -Wall -Wextra")
 
 if (USE_CLANG_SANITIZERS)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined -fsanitize=address")
+	message(WARNING "USE_CLANG_SANITIZERS has been renamed to USE_SANITIZERS")
+	set(USE_SANITIZERS on)
+endif()
+
+if (USE_SANITIZERS)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined,address")
+	add_definitions(-DUSING_SANITIZERS)
 endif()
 
 # Debug Release RelWithDebInfo MinSizeRel.
@@ -111,6 +124,9 @@ include(GNUInstallDirs)
 message(STATUS "CMAKE_INSTALL_LIBDIR: \"${CMAKE_INSTALL_LIBDIR}\"")
 message(STATUS "CMAKE_INSTALL_INCLUDEDIR: \"${CMAKE_INSTALL_INCLUDEDIR}\"")
 
-add_subdirectory(src)
-#add_subdirectory(tests EXCLUDE_FROM_ALL)
+add_subdirectory(lib)
 #add_subdirectory(tools)
+#add_subdirectory(tests EXCLUDE_FROM_ALL)
+
+install(DIRECTORY include/
+	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
