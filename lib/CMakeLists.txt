@@ -1,4 +1,6 @@
 include_directories(${CMAKE_SOURCE_DIR}/lib)
+include_directories(${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs)
+include_directories(${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_library(LLVMdg MODULE
@@ -26,6 +28,27 @@ add_library(LLVMdg MODULE
 	llvm/LLVMDGVerifier.cpp
 	llvm/analysis/Dominators/PostDominators.cpp
 	llvm/analysis/DefUse/DefUse.cpp
+        llvm/analysis/ThreadRegions/sources/MayHappenInParallel.cpp
+        llvm/analysis/ThreadRegions/sources/ThreadRegion.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/BlockGraph.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/ControlFlowGraph.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/CriticalSectionsBuilder.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/FunctionGraph.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/GraphBuilder.cpp
+        llvm/analysis/ThreadRegions/sources/Graphs/ThreadRegionsBuilder.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/CallFuncPtrNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/CallNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/CallReturnNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/EntryNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/ExitNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/ForkNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/GeneralNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/JoinNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/LockNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/Node.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/NodeIterator.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/ReturnNode.cpp
+        llvm/analysis/ThreadRegions/sources/Nodes/UnlockNode.cpp
 )
 target_compile_features(LLVMdg PRIVATE cxx_range_for cxx_auto_type)
 set_target_properties(LLVMdg PROPERTIES COMPILE_FLAGS "-std=c++11 -fno-rtti -g")
@@ -105,4 +128,30 @@ install(FILES
 	${CMAKE_SOURCE_DIR}/lib/llvm/LLVMDGVerifier.h
 	${CMAKE_SOURCE_DIR}/lib/llvm/llvm-utils.h
 	DESTINATION ${INCLUDE_DIR}/llvm/
+)
+
+install(FILES
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/ThreadRegions/ControlFlowGraph.h
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/ThreadRegions/MayHappenInParallel.h
+	${CMAKE_SOURCE_DIR}/include/dg/llvm/analysis/ThreadRegions/ThreadRegion.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/CallFuncPtrNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/CallNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/CallReturnNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/EntryNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/ExitNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/ForkNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/GeneralNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/JoinNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/LockNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/Node.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/NodeIterator.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/Nodes.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/ReturnNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Nodes/UnlockNode.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs/BlockGraph.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs/CriticalSectionsBuilder.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs/FunctionGraph.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs/GraphBuilder.h
+        ${CMAKE_SOURCE_DIR}/lib/llvm/analysis/ThreadRegions/include/Graphs/ThreadRegionsBuilder.h
+        DESTINATION ${INCLUDE_DIR}/llvm/analysis/ThreadRegions
 )

@@ -17,7 +17,7 @@ extern PSNode *INVALIDATED;
 
 struct Pointer
 {
-    Pointer(PSNode *n, Offset off = 0) : target(n), offset(off)
+    Pointer(PSNode *n, Offset off) : target(n), offset(off)
     {
         assert(n && "Cannot have a pointer with nullptr as target");
     }
@@ -38,7 +38,7 @@ struct Pointer
     }
 
     bool isNull() const { return target == NULLPTR; }
-    bool isUnknown() const { return target == UNKNOWN_MEMORY; };
+    bool isUnknown() const { return target == UNKNOWN_MEMORY; }
     bool isValid() const { return !isNull() && !isUnknown(); }
     bool isInvalidated() const { return target == INVALIDATED; }
 
@@ -50,8 +50,8 @@ struct Pointer
 
 };
 
-extern const Pointer PointerUnknown;
-extern const Pointer PointerNull;
+extern const Pointer UnknownPointer;
+extern const Pointer NullPointer;
 
 } // namespace pta
 } // namespace analysis

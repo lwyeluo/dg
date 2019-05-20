@@ -15,9 +15,11 @@ namespace dg {
 namespace analysis {
 namespace pta {
 
-// special nodes
+// special nodes and pointers to them
 extern PSNode *NULLPTR;
 extern PSNode *UNKNOWN_MEMORY;
+extern const Pointer NullPointer;
+extern const Pointer UnknownPointer;
 
 class PointerAnalysis
 {
@@ -196,6 +198,16 @@ public:
     // @ where is the callsite
     // @ what is the function that is being called
     virtual bool functionPointerCall(PSNode * /*where*/, PSNode * /*what*/)
+    {
+        return false;
+    }
+
+    virtual bool handleFork(PSNode *)
+    {
+        return false;
+    }
+
+    virtual bool handleJoin(PSNode *)
     {
         return false;
     }

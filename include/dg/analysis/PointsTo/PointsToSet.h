@@ -39,6 +39,9 @@ class PointsToSet {
     }
 
 public:
+    PointsToSet() = default;
+    PointsToSet(std::initializer_list<Pointer> elems) { add(elems); }
+
     bool add(PSNode *target, Offset off) {
         if (off.isUnknown())
             return addWithUnknownOffset(target);
@@ -68,6 +71,14 @@ public:
         bool changed = false;
         for (auto& it : S.pointers) {
             changed |= pointers[it.first].set(it.second);
+        }
+        return changed;
+    }
+
+    bool add(std::initializer_list<Pointer> elems) {
+        bool changed = false;
+        for (const auto& e : elems) {
+            changed |= add(e);
         }
         return changed;
     }
@@ -145,6 +156,10 @@ public:
     bool has(const Pointer& ptr) const {
         return count(ptr) > 0;
     }
+
+    bool hasUnknown() const { return pointsToTarget(UNKNOWN_MEMORY); }
+    bool hasNull() const { return pointsToTarget(NULLPTR); }
+    bool hasInvalidated() const { return pointsToTarget(INVALIDATED); }
 
     size_t size() const {
         size_t num = 0;
@@ -233,6 +248,9 @@ class SimplePointsToSet {
     }
 
 public:
+    SimplePointsToSet() = default;
+    SimplePointsToSet(std::initializer_list<Pointer> elems) { add(elems); }
+
     bool add(PSNode *target, Offset off) {
         if (off.isUnknown())
             return addWithUnknownOffset(target);
@@ -257,6 +275,14 @@ public:
             changed |= pointers.insert(ptr).second;
         }
 
+        return changed;
+    }
+
+    bool add(std::initializer_list<Pointer> elems) {
+        bool changed = false;
+        for (const auto& e : elems) {
+            changed |= add(e);
+        }
         return changed;
     }
 
@@ -325,6 +351,9 @@ public:
     size_t size() { return pointers.size(); }
     bool empty() const { return pointers.empty(); }
     bool has(const Pointer& ptr) { return count(ptr) > 0; }
+    bool hasUnknown() const { return pointsToTarget(UNKNOWN_MEMORY); }
+    bool hasNull() const { return pointsToTarget(NULLPTR); }
+    bool hasInvalidated() const { return pointsToTarget(INVALIDATED); }
 
     void swap(SimplePointsToSet& rhs) { pointers.swap(rhs.pointers); }
 

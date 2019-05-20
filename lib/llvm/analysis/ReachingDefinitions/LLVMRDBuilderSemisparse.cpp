@@ -216,16 +216,13 @@ RDNode *LLVMRDBuilderSemisparse::createNode(const llvm::Instruction &Inst, RDBlo
 }
 
 bool LLVMRDBuilderSemisparse::isStrongUpdate(const llvm::Value *val, const DefSite& ds, RDBlock *rb) {
-    pta::PSNode *psn = PTA->getPointsTo(val);
-    for (const pta::Pointer& ptr : psn->pointsTo) {
-        if (ptr.isNull() || ptr.isUnknown() || ptr.isInvalidated())
-            continue;
-        const llvm::Value *ptrVal = ptr.target->getUserData<llvm::Value>();
+    auto psn = PTA->getLLVMPointsTo(val);
+    for (const auto& ptr : psn) {
         // this may emerge with vararg function
-        if (llvm::isa<llvm::Function>(ptrVal))
+        if (llvm::isa<llvm::Function>(ptr.value))
             continue;
 
-        RDNode *ptrNode = getOperand(ptrVal, rb);
+        RDNode *ptrNode = getOperand(ptr.value, rb);
         if (ptrNode != ds.target)
             continue;
 
@@ -245,9 +242,9 @@ bool LLVMRDBuilderSemisparse::isStrongUpdate(const llvm::Value *val, const DefSi
         //  If we would do strong update on line 2 (which we would, since
         //  there we have must alias for the malloc), we would loose the
         //  definitions for line 1 and we would get incorrect results
-        pta::PSNodeAlloc *target = pta::PSNodeAlloc::get(ptr.target);
+        pta::PSNodeAlloc *target = pta::PSNodeAlloc::get(PTA->getPointsTo(ptr.value));
         assert(target && "Target of pointer is not an allocation");
-        bool strong_update = psn->pointsTo.size() == 1 && !target->isHeap();
+        bool strong_update = psn.isSingleton() == 1 && !target->isHeap();
         return strong_update;
     }
     if (!ds.target->isUnknown())
@@ -1073,7 +1070,7 @@ LLVMRDBuilderSemisparse::createCall(const llvm::Instruction *Inst, RDBlock *rb)
     }
 }
 
-RDNode *LLVMRDBuilderSemisparse::build()
+ReachingDefinitionsGraph LLVMRDBuilderSemisparse::build()
 {
     // get entry function
     llvm::Function *F = M->getFunction(_options.entryFunction);
@@ -1108,7 +1105,10 @@ RDNode *LLVMRDBuilderSemisparse::build()
         delete glob;
     }
 
-    return root;
+    ReachingDefinitionsGraph graph;
+    graph.setRoot(root);
+
+    return graph;
 }
 
 static uint64_t getGlobalVariableSize(const llvm::GlobalVariable *var, const llvm::DataLayout *DL)

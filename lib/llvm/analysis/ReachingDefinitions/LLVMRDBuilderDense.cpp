@@ -43,10 +43,27 @@ namespace dg {
 namespace analysis {
 namespace rd {
 
+static inline void makeEdge(RDNode *src, RDNode *dst)
+{
+    assert(src != dst && "Tried creating self-loop");
+    assert(src != nullptr);
+    // This is checked by addSuccessor():
+    // assert(dst != nullptr);
+
+    src->addSuccessor(dst);
+}
+
 RDNode *LLVMRDBuilderDense::createAlloc(const llvm::Instruction *Inst)
 {
     RDNode *node = new RDNode(RDNodeType::ALLOC);
-    addNode(Inst, node);
+    auto iterator = nodes_map.find(Inst);
+    if (iterator == nodes_map.end()) {
+        addNode(Inst, node);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+        addArtificialNode(Inst, node);
+        makeEdge(iterator->second, node);
+    }
 
     if (const llvm::AllocaInst *AI
             = llvm::dyn_cast<llvm::AllocaInst>(Inst))
@@ -60,7 +77,13 @@ RDNode *LLVMRDBuilderDense::createDynAlloc(const llvm::Instruction *Inst, Alloca
     using namespace llvm;
 
     RDNode *node = new RDNode(RDNodeType::DYN_ALLOC);
-    addNode(Inst, node);
+    auto iterator = nodes_map.find(Inst);
+    if (iterator == nodes_map.end()) {
+        addNode(Inst, node);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+        addArtificialNode(Inst, node);
+    }
 
     const CallInst *CInst = cast<CallInst>(Inst);
     const Value *op;
@@ -98,7 +121,13 @@ RDNode *LLVMRDBuilderDense::createDynAlloc(const llvm::Instruction *Inst, Alloca
 RDNode *LLVMRDBuilderDense::createRealloc(const llvm::Instruction *Inst)
 {
     RDNode *node = new RDNode(RDNodeType::DYN_ALLOC);
-    addNode(Inst, node);
+    auto iterator = nodes_map.find(Inst);
+    if (iterator == nodes_map.end()) {
+        addNode(Inst, node);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+        addArtificialNode(Inst, node);
+    }
 
     uint64_t size = getConstantValue(Inst->getOperand(1));
     if (size == 0)
@@ -212,98 +241,55 @@ RDNode *LLVMRDBuilderDense::createStore(const llvm::Instruction *Inst)
     RDNode *node = new RDNode(RDNodeType::STORE);
     addNode(Inst, node);
 
-    pta::PSNode *pts = PTA->getPointsTo(Inst->getOperand(1));
-    if (!pts) {
-        llvm::errs() << "[RD] Error: Don't have the points-to node "
-                        "for store's target\n";
-        llvm::errs() << *Inst << "\n";
-#ifdef NDEBUG
-        pts = pta::UNKNOWN_MEMORY;
-#else
-        abort();
-#endif
+    uint64_t size = getAllocatedSize(Inst->getOperand(0)->getType(), DL);
+    if (size == 0)
+        size = Offset::UNKNOWN;
+
+    auto defSites = mapPointers(Inst, Inst->getOperand(1), size);
+
+    // strong update is possible only with must aliases. Also we can not
+    // be pointing to heap, because then we don't know which object it
+    // is in run-time, like:
+    //  void *foo(int a)
+    //  {
+    //      void *mem = malloc(...)
+    //      mem->n = a;
+    //  }
+    //
+    //  1. mem1 = foo(3);
+    //  2. mem2 = foo(4);
+    //  3. assert(mem1->n == 3);
+    //
+    //  If we would do strong update on line 2 (which we would, since
+    //  there we have must alias for the malloc), we would loose the
+    //  definitions for line 1 and we would get incorrect results
+    bool strong_update = false;
+    if (defSites.size() == 1) {
+        const auto& ds = *(defSites.begin());
+        strong_update = !ds.offset.isUnknown() && !ds.len.isUnknown() &&
+                         ds.target->getType() != RDNodeType::DYN_ALLOC;
     }
 
-    if (pts->pointsTo.empty()) {
-        llvm::errs() << "[RD] Error: empty points-to set for store's target\n"
-                     << *Inst << "\n";
-
-        // Don't abort in this case.
-        // This may happen on invalid reads and writes to memory,
-        // like when you try for example this:
-        //
-        //   int p, q;
-        //   memcpy(p, q, sizeof p);
-        //
-        // (there should be &p and &q). This is an error in program,
-        // but we still want to analyze it.
-        node->addDef(UNKNOWN_MEMORY);
-        return node;
+    for (const auto& ds : defSites) {
+        node->addDef(ds, strong_update);
     }
 
-    for (const pta::Pointer& ptr: pts->pointsTo) {
-        // XXX we should at least warn?
-        if (ptr.isNull())
-            continue;
+    assert(node);
+    return node;
+}
 
-        if (ptr.isUnknown()) {
-            node->addDef(UNKNOWN_MEMORY);
-            continue;
-        }
+RDNode *LLVMRDBuilderDense::createLoad(const llvm::Instruction *Inst)
+{
+    RDNode *node = new RDNode(RDNodeType::LOAD);
+    addNode(Inst, node);
 
-        // XXX: we should do something, shouldn't we?
-        // Or we just slice only well-defined programs?
-        if (ptr.isInvalidated())
-            continue;
+    uint64_t size = getAllocatedSize(Inst->getType(), DL);
+    if (size == 0)
+        size = Offset::UNKNOWN;
 
-        const llvm::Value *ptrVal = ptr.target->getUserData<llvm::Value>();
-        // this may emerge with vararg function
-        if (llvm::isa<llvm::Function>(ptrVal))
-            continue;
-
-        RDNode *ptrNode = getOperand(ptrVal);
-        //assert(ptrNode && "Don't have created node for pointer's target");
-        if (!ptrNode) {
-            // keeping such set is faster then printing it all to terminal
-            // ... and we don't flood the terminal that way
-            static std::set<const llvm::Value *> warned;
-            if (warned.insert(ptrVal).second) {
-                llvm::errs() << *ptrVal << "\n";
-                llvm::errs() << "Don't have created node for pointer's target\n";
-            }
-
-            continue;
-        }
-
-        uint64_t size;
-        if (ptr.offset.isUnknown()) {
-            size = Offset::UNKNOWN;
-        } else {
-            size = getAllocatedSize(Inst->getOperand(0)->getType(), DL);
-            if (size == 0)
-                size = Offset::UNKNOWN;
-        }
-
-        // strong update is possible only with must aliases. Also we can not
-        // be pointing to heap, because then we don't know which object it
-        // is in run-time, like:
-        //  void *foo(int a)
-        //  {
-        //      void *mem = malloc(...)
-        //      mem->n = a;
-        //  }
-        //
-        //  1. mem1 = foo(3);
-        //  2. mem2 = foo(4);
-        //  3. assert(mem1->n == 3);
-        //
-        //  If we would do strong update on line 2 (which we would, since
-        //  there we have must alias for the malloc), we would loose the
-        //  definitions for line 1 and we would get incorrect results
-        pta::PSNodeAlloc *target = pta::PSNodeAlloc::get(ptr.target);
-        assert(target && "Target of pointer is not an allocation");
-        bool strong_update = pts->pointsTo.size() == 1 && !target->isHeap();
-        node->addDef(ptrNode, ptr.offset, size, strong_update);
+    auto defSites = mapPointers(Inst, Inst->getOperand(0), size);
+    for (const auto& ds : defSites) {
+        node->addUse(ds);
     }
 
     assert(node);
@@ -333,8 +319,7 @@ static bool isRelevantCall(const llvm::Instruction *Inst,
         if (opts.getFunctionModel(func->getName()))
             return true;
         // memory allocation
-        if (opts.getAllocationFunction(func->getName())
-            != AllocationFunction::NONE)
+        if (opts.isAllocationFunction(func->getName()))
             return true;
 
         if (func->isIntrinsic()) {
@@ -357,16 +342,6 @@ static bool isRelevantCall(const llvm::Instruction *Inst,
         return true;
 
     assert(0 && "We should not reach this");
-}
-
-static inline void makeEdge(RDNode *src, RDNode *dst)
-{
-    assert(src != dst && "Tried creating self-loop");
-    assert(src != nullptr);
-    // This is checked by addSuccessor():
-    // assert(dst != nullptr);
-
-    src->addSuccessor(dst);
 }
 
 // return first and last nodes of the block
@@ -394,6 +369,10 @@ LLVMRDBuilderDense::buildBlock(const llvm::BasicBlock& block)
                 case Instruction::Store:
                     node = createStore(&Inst);
                     break;
+                case Instruction::Load:
+                    if (buildUses)
+                        node = createLoad(&Inst);
+                    break;
                 case Instruction::Ret:
                     // we need create returns, since
                     // these modify CFG and thus data-flow
@@ -404,13 +383,9 @@ LLVMRDBuilderDense::buildBlock(const llvm::BasicBlock& block)
                 case Instruction::Call:
                     if (!isRelevantCall(&Inst, _options))
                         break;
-
-                    std::pair<RDNode *, RDNode *> subg = createCall(&Inst);
-                    makeEdge(last_node, subg.first);
-
-                    // new nodes will connect to the return node
-                    node = last_node = subg.second;
-                    break;
+                auto call = createCall(&Inst);
+                makeEdge(last_node, call.first);
+                node = last_node = call.second;
             }
         }
 
@@ -465,17 +440,31 @@ static size_t blockAddSuccessors(std::map<const llvm::BasicBlock *,
 }
 
 std::pair<RDNode *, RDNode *>
-LLVMRDBuilderDense::createCallToFunction(const llvm::Function *F)
+LLVMRDBuilderDense::createCallToFunction(const llvm::Function *F,
+                                         const llvm::CallInst * CInst)
 {
-    RDNode *callNode, *returnNode;
+    if (auto model = _options.getFunctionModel(F->getName())) {
+        auto node = funcFromModel(model, CInst);
+        addNode(CInst, node);
+        return {node, node};
+    } else if (F->size() == 0) {
+        return createCallToZeroSizeFunction(F, CInst);
+    } else if (!llvmutils::callIsCompatible(F, CInst)) {
+        return {nullptr, nullptr};
+    }
 
-    // dummy nodes for easy generation
-    callNode = new RDNode(RDNodeType::CALL);
-    returnNode = new RDNode(RDNodeType::CALL_RETURN);
+    RDNode *callNode = nullptr;
+    RDNode *returnNode = nullptr;
 
-    // do not leak the memory of returnNode (the callNode
-    // will be added to nodes_map)
-    addNode(returnNode);
+    auto iterator = nodes_map.find(CInst);
+    if (iterator == nodes_map.end()) {
+        callNode = new RDNode(RDNodeType::CALL);
+        returnNode = new RDNode(RDNodeType::RETURN);
+        addNode(CInst, callNode);
+        addNode(returnNode);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+    }
 
     // FIXME: if this is an inline assembly call
     // we need to make conservative assumptions
@@ -497,13 +486,13 @@ LLVMRDBuilderDense::createCallToFunction(const llvm::Function *F)
 
     assert(root && ret && "Incomplete subgraph");
 
-    // add an edge from last argument to root of the subgraph
-    // and from the subprocedure return node (which is one - unified
-    // for all return nodes) to return from the call
-    makeEdge(callNode, root);
-    makeEdge(ret, returnNode);
+    if (callNode) {
+        makeEdge(callNode, root);
+        makeEdge(ret, returnNode);
+        return {callNode, returnNode};
+    }
 
-    return std::make_pair(callNode, returnNode);
+    return {root, ret};
 }
 
 std::pair<RDNode *, RDNode *>
@@ -568,7 +557,13 @@ RDNode *LLVMRDBuilderDense::createUndefinedCall(const llvm::CallInst *CInst)
     using namespace llvm;
 
     RDNode *node = new RDNode(RDNodeType::CALL);
-    addNode(CInst, node);
+    auto iterator = nodes_map.find((CInst));
+    if (iterator == nodes_map.end()) {
+        addNode(CInst, node);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+        addArtificialNode(CInst, node);
+    }
 
     // if we assume that undefined functions are pure
     // (have no side effects), we can bail out here
@@ -591,26 +586,19 @@ RDNode *LLVMRDBuilderDense::createUndefinedCall(const llvm::CallInst *CInst)
                 continue;
         }
 
-        pta::PSNode *pts = PTA->getPointsTo(llvmOp);
+        auto pts = PTA->getLLVMPointsToChecked(llvmOp);
         // if we do not have a pts, this is not pointer
         // relevant instruction. We must do it this way
         // instead of type checking, due to the inttoptr.
-        if (!pts)
+        if (!pts.first)
             continue;
 
-        for (const pta::Pointer& ptr : pts->pointsTo) {
-            if (!ptr.isValid())
-                continue;
-
-            if (ptr.isInvalidated())
-                continue;
-
-            const llvm::Value *ptrVal = ptr.target->getUserData<llvm::Value>();
-            if (llvm::isa<llvm::Function>(ptrVal))
+        for (const auto& ptr : pts.second) {
+            if (llvm::isa<llvm::Function>(ptr.value))
                 // function may not be redefined
                 continue;
 
-            RDNode *target = getOperand(ptrVal);
+            RDNode *target = getOperand(ptr.value);
             assert(target && "Don't have pointer target for call argument");
 
             // this call may define this memory
@@ -623,6 +611,33 @@ RDNode *LLVMRDBuilderDense::createUndefinedCall(const llvm::CallInst *CInst)
     // unknown memory instead of the loop above
 
     return node;
+}
+
+bool LLVMRDBuilderDense::isInlineAsm(const llvm::Instruction *instruction)
+{
+    const llvm::CallInst *callInstruction = llvm::cast<llvm::CallInst>(instruction);
+    return callInstruction->isInlineAsm();
+}
+
+void LLVMRDBuilderDense::matchForksAndJoins()
+{
+    using namespace llvm;
+    using namespace pta;
+    auto joinsMap = PTA->getJoins();
+
+    for (auto & joinInstAndJoinNode : joinsMap) {
+        auto callInst = joinInstAndJoinNode.first->getUserData<llvm::CallInst>();
+        auto PSJoinNode = joinInstAndJoinNode.second;
+        auto iterator = threadJoinCalls.find(callInst);
+        if (iterator != threadJoinCalls.end()) {
+            for (auto & function : PSJoinNode->functions()) {
+                auto llvmFunction = function->getUserData<llvm::Function>();
+                auto graphIterator = subgraphs_map.find(llvmFunction);
+                RDNode *returnNode = graphIterator->second.ret;
+                makeEdge(returnNode, iterator->second);
+            }
+        } 
+    }
 }
 
 RDNode *LLVMRDBuilderDense::createIntrinsicCall(const llvm::CallInst *CInst)
@@ -658,27 +673,22 @@ RDNode *LLVMRDBuilderDense::createIntrinsicCall(const llvm::CallInst *CInst)
     ret = new RDNode(RDNodeType::CALL);
     addNode(CInst, ret);
 
-    pta::PSNode *pts = PTA->getPointsTo(dest);
-    if (!pts) {
+    auto pts = PTA->getLLVMPointsToChecked(dest);
+    if (!pts.first) {
         llvm::errs() << "[RD] Error: No points-to information for destination in\n";
         llvm::errs() << *I << "\n";
-#ifdef NDEBUG
-        pts = pta::UNKNOWN_MEMORY;
-#else
+#ifndef NDEBUG
         abort();
 #endif
+        // continue, the points-to set is {unknown}
     }
 
     uint64_t len = Offset::UNKNOWN;
     if (const ConstantInt *C = dyn_cast<ConstantInt>(lenVal))
         len = C->getLimitedValue();
 
-    for (const pta::Pointer& ptr : pts->pointsTo) {
-        if (!ptr.isValid() || ptr.isInvalidated())
-            continue;
-
-        const llvm::Value *ptrVal = ptr.target->getUserData<llvm::Value>();
-        if (llvm::isa<llvm::Function>(ptrVal))
+    for (const auto& ptr : pts.second) {
+        if (llvm::isa<llvm::Function>(ptr.value))
             continue;
 
         uint64_t from, to;
@@ -696,7 +706,7 @@ RDNode *LLVMRDBuilderDense::createIntrinsicCall(const llvm::CallInst *CInst)
         else
             to = Offset::UNKNOWN;
 
-        RDNode *target = getOperand(ptrVal);
+        RDNode *target = getOperand(ptr.value);
         assert(target && "Don't have pointer target for intrinsic call");
 
         // add the definition
@@ -713,29 +723,22 @@ RDNode *LLVMRDBuilderDense::funcFromModel(const FunctionModel *model, const llvm
         if (!defines)
             continue;
         const auto llvmOp = CInst->getArgOperand(i);
-        pta::PSNode *pts = PTA->getPointsTo(llvmOp);
+        auto pts = PTA->getLLVMPointsToChecked(llvmOp);
         // if we do not have a pts, this is not pointer
         // relevant instruction. We must do it this way
         // instead of type checking, due to the inttoptr.
-        if (!pts) {
+        if (!pts.first) {
             llvm::errs() << "[Warning]: did not find pt-set for modeled function\n";
             llvm::errs() << "           Func: " << model->name << ", operand " << i << "\n";
             continue;
         }
 
-        for (const pta::Pointer& ptr : pts->pointsTo) {
-            if (!ptr.isValid())
-                continue;
-
-            if (ptr.isInvalidated())
-                continue;
-
-            const llvm::Value *ptrVal = ptr.target->getUserData<llvm::Value>();
-            if (llvm::isa<llvm::Function>(ptrVal))
+        for (const auto& ptr : pts.second) {
+            if (llvm::isa<llvm::Function>(ptr.value))
                 // function may not be redefined
                 continue;
 
-            RDNode *target = getOperand(ptrVal);
+            RDNode *target = getOperand(ptr.value);
             assert(target && "Don't have pointer target for call argument");
 
             auto from = defines->from.isOperand()
@@ -764,132 +767,135 @@ LLVMRDBuilderDense::createCall(const llvm::Instruction *Inst)
             llvm::errs() << "WARNING: RD: Inline assembler found\n";
             warned_inline_assembly = true;
         }
-
-        RDNode *n = createUndefinedCall(CInst);
-        return std::make_pair(n, n);
+        RDNode *node = createUndefinedCall(CInst);
+        return {node, node};
     }
 
-    const Function *func = dyn_cast<Function>(calledVal);
-    if (func) {
-        if (auto model = _options.getFunctionModel(func->getName())) {
-            auto node = funcFromModel(model, CInst);
-            addNode(CInst, node);
-            return std::make_pair(node, node);
-        } else if (func->size() == 0) {
-            RDNode *n;
-            if (func->isIntrinsic()) {
-                n = createIntrinsicCall(CInst);
-            } else {
-                auto type = _options.getAllocationFunction(func->getName());
-                if (type != AllocationFunction::NONE) {
-                    if (type == AllocationFunction::REALLOC)
-                        n = createRealloc(CInst);
-                    else
-                        n = createDynAlloc(CInst, type);
-                } else {
-                    n = createUndefinedCall(CInst);
-                }
-            }
-
-            return std::make_pair(n, n);
-        } else {
-            std::pair<RDNode *, RDNode *> cf
-                = createCallToFunction(func);
-            addNode(CInst, cf.first);
-            return cf;
-        }
-    } else {
-        // function pointer call
-        pta::PSNode *op = PTA->getPointsTo(calledVal);
-        assert(op && "Don't have points-to information");
-        //assert(!op->pointsTo.empty() && "Don't have pointer to the func");
-        if (op->pointsTo.empty()) {
-            llvm::errs() << "[RD] error: a call via a function pointer, "
-                            "but the points-to is empty\n"
-                         << *CInst << "\n";
-            RDNode *n = createUndefinedCall(CInst);
-            return std::make_pair(n, n);
-        }
-
-        RDNode *call_funcptr = nullptr, *ret_call = nullptr;
-
-        if (op->pointsTo.size() > 1) {
-            for (const pta::Pointer& ptr : op->pointsTo) {
-                if (!ptr.isValid() || ptr.isInvalidated())
-                    continue;
-
-                // check if it is a function (varargs may
-                // introduce some unprecision to func. pointers)
-                if (!isa<Function>(ptr.target->getUserData<Value>()))
-                    continue;
-
-                const Function *F = ptr.target->getUserData<Function>();
-                if (F->size() == 0) {
-                    // the function is a declaration only,
-                    // there's nothing better we can do
-                    RDNode *n = createUndefinedCall(CInst);
-                    return std::make_pair(n, n);
-                }
-
-                // FIXME: these checks are repeated here, in PSSBuilder
-                // and in LLVMDependenceGraph, we should factor them
-                // out into a function...
-                if (!llvmutils::callIsCompatible(F, CInst))
-                    continue;
-
-                std::pair<RDNode *, RDNode *> cf
-                    = createCallToFunction(F);
-                addNode(cf.first);
-
-                // connect the graphs
-                if (!call_funcptr) {
-                    assert(!ret_call);
-
-                    // create the new nodes lazily
-                    call_funcptr = new RDNode(RDNodeType::CALL);
-                    ret_call = new RDNode(RDNodeType::CALL_RETURN);
-                    addNode(CInst, call_funcptr);
-                    addNode(ret_call);
-                }
-
-                makeEdge(call_funcptr, cf.first);
-                makeEdge(cf.second, ret_call);
-            }
-        } else {
-            // don't add redundant nodes if not needed
-            const pta::Pointer& ptr = *(op->pointsTo.begin());
-            if (ptr.isValid()) {
-                const llvm::Value *valF = ptr.target->getUserData<llvm::Value>();
-                if (const llvm::Function *F = llvm::dyn_cast<llvm::Function>(valF)) {
-                    if (F->size() == 0) {
-                        RDNode *n = createUndefinedCall(CInst);
-                        return std::make_pair(n, n);
-                    } else if (llvmutils::callIsCompatible(F, CInst)) {
-                        std::pair<RDNode *, RDNode *> cf = createCallToFunction(F);
-                        addNode(cf.first);
-
-                        call_funcptr = cf.first;
-                        ret_call = cf.second;
-                    }
-                }
-            }
-        }
-
-        if (!ret_call) {
-            assert(!call_funcptr);
-            llvm::errs() << "Function pointer call with no compatible pointer: "
-                         << *CInst << "\n";
-
-            RDNode *n = createUndefinedCall(CInst);
-            return std::make_pair(n, n);
-        }
-
-        assert(call_funcptr && ret_call);
-        return std::make_pair(call_funcptr, ret_call);
+    const Function *function = dyn_cast<Function>(calledVal);
+    if (function != nullptr) {
+        return createCallToFunction(function, CInst);
     }
+
+    auto functions = PTA->getPointsToFunctions(calledVal);
+    return createCallToFunctions(functions, CInst);
 }
 
-RDNode *LLVMRDBuilderDense::build()
+std::pair<RDNode *, RDNode *>
+LLVMRDBuilderDense::createCallToZeroSizeFunction(const llvm::Function *function,
+                                                 const llvm::CallInst *CInst)
+{
+    if (function->isIntrinsic()) {
+        RDNode *node = createIntrinsicCall(CInst);
+        return {node, node};
+    }
+    if (_options.threads) {
+        if (function->getName() == "pthread_create") {
+            return createPthreadCreateCalls(CInst);
+        } else if (function->getName() == "pthread_join") {
+            return createPthreadJoinCall(CInst);
+        } else if (function->getName() == "pthread_exit") {
+            return createPthreadExitCall(CInst);
+        }
+    }
+    auto type = _options.getAllocationFunction(function->getName());
+    RDNode *node = nullptr;
+    if (type != AllocationFunction::NONE) {
+        if (type == AllocationFunction::REALLOC)
+            node = createRealloc(CInst);
+        else
+            node = createDynAlloc(CInst, type);
+    } else {
+        node = createUndefinedCall(CInst);
+    }
+    return {node, node};
+}
+
+std::pair<RDNode *, RDNode *>
+LLVMRDBuilderDense::createCallToFunctions(const std::vector<const llvm::Function *> &functions,
+                                           const llvm::CallInst *CInst)
+{
+    using namespace std;
+
+    RDNode *callNode = new RDNode(RDNodeType::CALL);
+    RDNode *returnNode = new RDNode(RDNodeType::RETURN);
+    addNode(CInst, callNode);
+    addNode(returnNode);
+
+    bool hasFunction = false;
+    for(const llvm::Function *function : functions) {
+        auto func = createCallToFunction(function, CInst);
+        if (func.first && func.second) {
+            makeEdge(callNode, func.first);
+            makeEdge(func.second, returnNode);
+            hasFunction |= true;
+        }
+    }
+
+    if (!hasFunction) {
+        llvm::errs() << "[RD] error: a call via a function pointer, "
+                        "but the points-to is empty\n"
+                     << *CInst << "\n";
+        RDNode *node = createUndefinedCall(CInst);
+        makeEdge(callNode, node);
+        makeEdge(node, returnNode);
+    }
+
+    return {callNode, returnNode};
+}
+
+std::pair<RDNode *, RDNode *>
+LLVMRDBuilderDense::createPthreadCreateCalls(const llvm::CallInst *CInst)
+{
+    using namespace llvm;
+
+    RDNode *rootNode = new RDNode(RDNodeType::FORK);
+    auto iterator = nodes_map.find(CInst);
+    if (iterator == nodes_map.end()) {
+        addNode(CInst, rootNode);
+    } else {
+        assert(iterator->second->getType() == RDNodeType::CALL && "Adding node we already have");
+        addArtificialNode(CInst, rootNode);
+    }
+    threadCreateCalls.emplace(CInst, rootNode);
+
+    Value *calledValue = CInst->getArgOperand(2);
+    auto functions = PTA->getPointsToFunctions(calledValue);
+
+    RDNode *root = nullptr;
+    RDNode *ret = nullptr;
+    for (const Function *function : functions) {
+        auto it = subgraphs_map.find(function);
+        if (it == subgraphs_map.end()) {
+            std::tie(root, ret) = buildFunction(*function);
+        } else {
+            root = it->second.root;
+            ret = it->second.ret;
+        }
+        assert(root && ret && "Incomplete subgraph");
+        makeEdge(rootNode, root);
+    }
+    return {rootNode, rootNode};
+}
+
+std::pair<RDNode *, RDNode *>
+LLVMRDBuilderDense::createPthreadJoinCall(const llvm::CallInst *CInst)
+{
+    // TODO later change this to create join node and set data correctly
+    // we need just to create one node;
+    // undefined call is overapproximation, so its ok
+    RDNode *node = createUndefinedCall(CInst);
+    threadJoinCalls.emplace(CInst, node);
+    return {node, node};
+}
+
+std::pair<RDNode *, RDNode *> 
+LLVMRDBuilderDense::createPthreadExitCall(const llvm::CallInst *CInst)
+{
+    auto node = createReturn(CInst);
+    return {node, node};
+}
+
+ReachingDefinitionsGraph LLVMRDBuilderDense::build()
 {
     // get entry function
     llvm::Function *F = M->getFunction(_options.entryFunction);
@@ -919,7 +925,14 @@ RDNode *LLVMRDBuilderDense::build()
         root = glob.first;
     }
 
-    return root;
+    if (_options.threads) {
+        matchForksAndJoins();
+    }
+
+    ReachingDefinitionsGraph graph;
+    graph.setRoot(root);
+
+    return graph;
 }
 
 std::pair<RDNode *, RDNode *> LLVMRDBuilderDense::buildGlobals()
@@ -940,6 +953,77 @@ std::pair<RDNode *, RDNode *> LLVMRDBuilderDense::buildGlobals()
 
     assert((!first && !cur) || (first && cur));
     return std::pair<RDNode *, RDNode *>(first, cur);
+}
+
+///
+// Map pointers of 'val' to def-sites.
+// \param where  location in the program, for debugging
+// \param size is the number of bytes used from the memory
+std::vector<DefSite> LLVMRDBuilderDense::mapPointers(const llvm::Value *where,
+                                                     const llvm::Value *val,
+                                                     Offset size)
+{
+    std::vector<DefSite> result;
+
+    auto psn = PTA->getLLVMPointsToChecked(val);
+    if (!psn.first) {
+        result.push_back(DefSite(UNKNOWN_MEMORY));
+#ifndef NDEBUG
+        llvm::errs() << "[RD] warning at: " << *where << "\n";
+        llvm::errs() << "No points-to set for: " << *val << "\n";
+#endif
+        // don't have points-to information for used pointer
+        return result;
+    }
+
+    if (psn.second.empty()) {
+#ifndef NDEBUG
+        llvm::errs() << "[RD] warning at: " << *where << "\n";
+        llvm::errs() << "Empty points-to set for: " << *val << "\n";
+#endif
+        // this may happen on invalid reads and writes to memory,
+        // like when you try for example this:
+        //
+        //   int p, q;
+        //   memcpy(p, q, sizeof p);
+        //
+        // (there should be &p and &q)
+        // NOTE: maybe this is a bit strong to say unknown memory,
+        // but better be sound then incorrect
+        result.push_back(DefSite(UNKNOWN_MEMORY));
+        return result;
+    }
+
+    result.reserve(psn.second.size());
+
+    if (psn.second.hasUnknown()) {
+        result.push_back(DefSite(UNKNOWN_MEMORY));
+    }
+
+    for (const auto& ptr: psn.second) {
+        if (llvm::isa<llvm::Function>(ptr.value))
+            continue;
+
+        RDNode *ptrNode = getOperand(ptr.value);
+        if (!ptrNode) {
+            // keeping such set is faster then printing it all to terminal
+            // ... and we don't flood the terminal that way
+            static std::set<const llvm::Value *> warned;
+            if (warned.insert(ptr.value).second) {
+                llvm::errs() << "[RD] error for " << *val << "\n";
+                llvm::errs() << "[RD] error: Haven't created the node for the pointer to:\n";
+                llvm::errs() << *ptr.value << "\n";
+            }
+            continue;
+        }
+
+        // FIXME: we should pass just size to the DefSite ctor, but the old code relies
+        // on the behavior that when offset is unknown, the length is also unknown.
+        // So for now, mimic the old code. Remove it once we fix the old code.
+        result.push_back(DefSite(ptrNode, ptr.offset, ptr.offset.isUnknown() ? Offset::UNKNOWN : size));
+    }
+
+    return result;
 }
 
 } // namespace rd

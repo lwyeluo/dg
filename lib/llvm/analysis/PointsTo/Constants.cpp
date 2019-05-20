@@ -1,8 +1,11 @@
 #include "dg/llvm/analysis/PointsTo/PointerSubgraph.h"
+#include "llvm/llvm-utils.h"
 
 namespace dg {
 namespace analysis {
 namespace pta {
+
+extern const Pointer UnknownPointer;
 
 Pointer LLVMPointerSubgraphBuilder::handleConstantPtrToInt(const llvm::PtrToIntInst *P2I)
 {
@@ -24,7 +27,7 @@ Pointer LLVMPointerSubgraphBuilder::handleConstantIntToPtr(const llvm::IntToPtrI
     const Value *llvmOp = I2P->getOperand(0);
     if (isa<ConstantInt>(llvmOp)) {
         llvm::errs() << "IntToPtr with constant: " << *I2P << "\n";
-        return PointerUnknown;
+        return UnknownPointer;
     }
 
     // (possibly recursively) get the operand of this bit-cast
@@ -56,7 +59,7 @@ Pointer LLVMPointerSubgraphBuilder::handleConstantAdd(const llvm::Instruction *I
             op = tryGetOperand(Inst->getOperand(1));
 
         if (!op)
-            return createUnknown(Inst);
+            return Pointer{createUnknown(Inst), Offset::UNKNOWN};
     }
 
     assert(op && "Don't have operand for add");
@@ -89,7 +92,7 @@ Pointer LLVMPointerSubgraphBuilder::handleConstantArithmetic(const llvm::Instruc
             op = tryGetOperand(Inst->getOperand(1));
 
         if (!op)
-            return createUnknown(Inst);
+            return Pointer{createUnknown(Inst), Offset::UNKNOWN};
     }
 
     assert(op && "Don't have operand for add");
@@ -108,7 +111,7 @@ Pointer LLVMPointerSubgraphBuilder::handleConstantBitCast(const llvm::BitCastIns
         errs() << "WARN: Not a loss less cast unhandled ConstExpr"
                << *BC << "\n";
         abort();
-        return PointerUnknown;
+        return UnknownPointer;
     }
 
     const Value *llvmOp = BC->stripPointerCasts();
@@ -183,7 +186,7 @@ Pointer LLVMPointerSubgraphBuilder::getConstantExprPointer(const llvm::ConstantE
         case Instruction::Shl:
         case Instruction::LShr:
         case Instruction::AShr:
-            pointer = PointerUnknown;
+            pointer = UnknownPointer;
             break;
         case Instruction::Sub:
         case Instruction::Mul:

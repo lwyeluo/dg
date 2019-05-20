@@ -1,4 +1,19 @@
+// ignore unused parameters in LLVM libraries
+#if (__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+
 #include <llvm/IR/GlobalVariable.h>
+
+#if (__clang__)
+#pragma clang diagnostic pop // ignore -Wunused-parameter
+#else
+#pragma GCC diagnostic pop
+#endif
 
 #include "dg/analysis/ReachingDefinitions/SemisparseRda.h"
 #include "dg/llvm/analysis/ReachingDefinitions/ReachingDefinitions.h"
@@ -17,17 +32,19 @@ LLVMReachingDefinitions::~LLVMReachingDefinitions() {
 
 void LLVMReachingDefinitions::initializeSparseRDA() {
     builder = new LLVMRDBuilderSemisparse(m, pta, _options);
-    root = builder->build();
+    // let the compiler do copy-ellision
+    auto graph = builder->build();
 
-    RDA = std::unique_ptr<ReachingDefinitionsAnalysis>(new SemisparseRda(root));
+    RDA = std::unique_ptr<ReachingDefinitionsAnalysis>(
+                    new SemisparseRda(std::move(graph)));
 }
 
 void LLVMReachingDefinitions::initializeDenseRDA() {
     builder = new LLVMRDBuilderDense(m, pta, _options);
-    root = builder->build();
+    auto graph = builder->build();
 
     RDA = std::unique_ptr<ReachingDefinitionsAnalysis>(
-                    new ReachingDefinitionsAnalysis(root));
+                    new ReachingDefinitionsAnalysis(std::move(graph)));
 }
 
 RDNode *LLVMReachingDefinitions::getNode(const llvm::Value *val) {
@@ -104,8 +121,6 @@ LLVMReachingDefinitions::getLLVMReachingDefinitions(llvm::Value *where, llvm::Va
 
     return defs;
 }
-
-
 
 } // namespace rd
 } // namespace dg

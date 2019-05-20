@@ -54,15 +54,32 @@ getOperationWithConst(const llvm::Instruction *I) {
         auto tmp = C1;
         C1 = C2;
         C2 = tmp;
-        auto tmp1 = val1;
-        val1 = val2;
-        val2 = tmp1;
     }
 
     assert(!C1 && C2);
+    return {C1, C2->getSExtValue()};
+}
 
-    auto V = C2->getSExtValue();
-    return {val1, V};
+namespace {
+// adjusted from LLVM sources
+static inline
+const llvm::BasicBlock *getBasicBlockUniqueSuccessor(const llvm::BasicBlock *B) {
+#if (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR < 7)
+    auto SI = succ_begin(B), E = succ_end(B);
+    if (SI == E)
+        return nullptr; // No successors
+    auto SuccBB = *SI;
+    ++SI;
+    for (;SI != E; ++SI) {
+        if (*SI != SuccBB)
+            return nullptr;
+    }
+
+    return SuccBB;
+#else
+    return B->getUniqueSuccessor();
+#endif // LLVM 3.6
+}
 }
 
 class LLVMValueRelationsAnalysis {
@@ -229,7 +246,7 @@ class LLVMValueRelationsAnalysis {
                         break;
                     for (auto& I : *B)
                         fixedValues.insert(&I);
-                    B = B->getUniqueSuccessor();
+                    B = getBasicBlockUniqueSuccessor(B);
                 }
             }
         }

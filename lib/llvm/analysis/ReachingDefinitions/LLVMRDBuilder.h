@@ -4,9 +4,24 @@
 #include <unordered_map>
 #include <memory>
 
+// ignore unused parameters in LLVM libraries
+#if (__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+
 #include <llvm/Support/raw_os_ostream.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Constants.h>
+
+#if (__clang__)
+#pragma clang diagnostic pop // ignore -Wunused-parameter
+#else
+#pragma GCC diagnostic pop
+#endif
 
 #include "dg/analysis/ReachingDefinitions/ReachingDefinitions.h"
 #include "dg/llvm/analysis/ReachingDefinitions/LLVMReachingDefinitionsAnalysisOptions.h"
@@ -37,6 +52,9 @@ protected:
 
     // map of all nodes we created - use to look up operands
     std::unordered_map<const llvm::Value *, RDNode *> nodes_map;
+
+    std::map<const llvm::CallInst *, RDNode *> threadCreateCalls;
+    std::map<const llvm::CallInst *, RDNode *> threadJoinCalls;
 
     // mapping of llvm nodes to relevant reaching definitions nodes
     // (this is a super-set of nodes_map)
@@ -79,7 +97,7 @@ public:
             delete nd;
     }
 
-    virtual RDNode *build() = 0;
+    virtual ReachingDefinitionsGraph build() = 0;
 
     // let the user get the nodes map, so that we can
     // map the points-to informatio back to LLVM nodes
@@ -106,46 +124,6 @@ public:
         return it->second;
     }
 };
-
-
-// FIXME: don't duplicate the code (with PSS.cpp)
-inline uint64_t getConstantValue(const llvm::Value *op)
-{
-    using namespace llvm;
-
-    uint64_t size = 0;
-    if (const ConstantInt *C = dyn_cast<ConstantInt>(op)) {
-        size = C->getLimitedValue();
-        // if the size cannot be expressed as an uint64_t,
-        // just set it to 0 (that means unknown)
-        if (size == ~(static_cast<uint64_t>(0)))
-            size = 0;
-    }
-
-    return size;
-}
-
-inline uint64_t getAllocatedSize(llvm::Type *Ty, const llvm::DataLayout *DL)
-{
-    // Type can be i8 *null or similar
-    if (!Ty->isSized())
-            return 0;
-
-    return DL->getTypeAllocSize(Ty);
-}
-
-inline uint64_t getAllocatedSize(const llvm::AllocaInst *AI,
-                                 const llvm::DataLayout *DL)
-{
-    llvm::Type *Ty = AI->getAllocatedType();
-    if (!Ty->isSized())
-            return 0;
-
-    if (AI->isArrayAllocation())
-        return getConstantValue(AI->getArraySize()) * DL->getTypeAllocSize(Ty);
-    else
-        return DL->getTypeAllocSize(Ty);
-}
 
 }
 }

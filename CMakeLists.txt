@@ -1,11 +1,7 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 2.8)
 project(dg)
 
 include(CTest)
-include(CMakePackageConfigHelpers)
-include(GNUInstallDirs)
-
-include_directories( ${CMAKE_CURRENT_SOURCE_DIR}/src )
 
 # we need C++11 standard
 set(CMAKE_CXX_STANDARD 11)
@@ -51,12 +47,12 @@ if (LLVM_DG)
 	  message(STATUS "Looking for headers in: ${LLVM_INCLUDE_DIRS}")
 	endif()
 
-	# if we were provided a path to custom build directory
-	# use that
+       # if we were provided a path to custom build directory
+       # use that
 	if (LLVM_BUILD_PATH)
 	  link_directories(${LLVM_BUILD_PATH}/lib)
 
-	  # llvm-config.h
+         # llvm-config.h
 	  include_directories("${LLVM_BUILD_PATH}/include")
 	  message(STATUS "Looking for libraries in given: ${LLVM_BUILD_PATH}/lib")
 	else()
@@ -87,6 +83,21 @@ if (ENABLE_CFG)
 endif()
 
 message(STATUS "Using compiler: ${CMAKE_CXX_COMPILER}")
+
+
+# Our CI does not work with fuzzing tests yet, make it optional by hand
+option(TESTING_ENABLE_FUZZING "Enable fuzzing tests" off)
+if (TESING_ENABLE_FUZZING)
+	message(STATUS "Going to build fuzzing tests")
+endif()
+#if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
+	# FIXME: we should check for the version of clang
+	# or rather just whether -fsanitize=fuzzer works
+	#option(TESTING_ENABLE_FUZZING "Enable fuzzing tests" on)
+	#message(STATUS "Will build fuzzing tests")
+#else()
+#	message(STATUS "Will NOT build fuzzing tests")
+#endif()
 
 # explicitly add -std=c++11 and -fno-rtti
 # we have CMAKE_CXX_STANDARD, but for some reason it does not

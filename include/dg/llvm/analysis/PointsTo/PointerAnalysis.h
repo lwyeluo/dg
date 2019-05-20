@@ -24,9 +24,11 @@
 #include "dg/analysis/PointsTo/PointerAnalysis.h"
 #include "dg/analysis/PointsTo/PointerSubgraphOptimizations.h"
 #include "dg/analysis/PointsTo/PointerAnalysisFSInv.h"
+#include "dg/analysis/PointsTo/Pointer.h"
 
 #include "dg/llvm/analysis/PointsTo/LLVMPointerAnalysisOptions.h"
 #include "dg/llvm/analysis/PointsTo/PointerSubgraph.h"
+#include "dg/llvm/analysis/PointsTo/LLVMPointsToSet.h"
 
 
 namespace dg {
@@ -36,6 +38,7 @@ using analysis::pta::PointerSubgraph;
 using analysis::pta::PSNode;
 using analysis::pta::LLVMPointerSubgraphBuilder;
 using analysis::pta::PSNodesSeq;
+using analysis::pta::Pointer;
 using analysis::Offset;
 
 template <typename PTType>
@@ -50,6 +53,7 @@ public:
     // build new subgraphs on calls via pointer
     bool functionPointerCall(PSNode *callsite, PSNode *called) override
     {
+        using namespace analysis::pta;
         const llvm::Function *F
             = llvm::dyn_cast<llvm::Function>(called->getUserData<llvm::Value>());
         // with vararg it may happen that we get pointer that
@@ -58,15 +62,24 @@ public:
             return false;
 
         if (F->isDeclaration()) {
-            // calling declaration that returns a pointer?
-            // That is unknown pointer
-            return callsite->getPairedNode()->addPointsTo(analysis::pta::PointerUnknown);
+            if (builder->threads()) {
+                if (F->getName() == "pthread_create") {
+                    builder->insertPthreadCreateByPtrCall(callsite);
+                    return true;
+                } else if (F->getName() == "pthread_join") {
+                    builder->insertPthreadJoinByPtrCall(callsite);
+                    return true;
+                }
+            }
+            return callsite->getPairedNode()->addPointsTo(analysis::pta::UnknownPointer);
         }
 
-        if (!LLVMPointerSubgraphBuilder::callIsCompatible(callsite, called))
+        if (!LLVMPointerSubgraphBuilder::callIsCompatible(callsite, called)) {
             return false;
+        } else {
+            builder->insertFunctionCall(callsite, called);
+        }
 
-        builder->insertFunctionCall(callsite, called);
 
 #ifndef NDEBUG
         // check the graph after rebuilding, but do not check for connectivity,
@@ -81,6 +94,28 @@ public:
 
         return true; // we changed the graph
     }
+
+    bool handleFork(PSNode *forkNode) override
+    {
+        using namespace llvm;
+        using namespace dg::analysis::pta;
+        PSNodeFork *fork = PSNodeFork::get(forkNode);
+        const CallInst *CInst = fork->callInst()->getUserData<CallInst>();
+        const Value *funcValue = CInst->getArgOperand(2);
+        auto functions = builder->getPointsToFunctions(funcValue);
+        bool changed = false;
+        for(const auto & function : functions) {
+            builder->setAdHocBuilding(true);
+            changed |= builder->addFunctionToFork(function, fork);
+            builder->setAdHocBuilding(false);
+        }
+        return changed;
+    }
+
+    bool handleJoin(PSNode *joinNode) override
+    {
+        return builder->matchJoinToRightCreate(joinNode);
+    }
 };
 
 class LLVMPointerAnalysis
@@ -89,27 +124,85 @@ class LLVMPointerAnalysis
     std::unique_ptr<LLVMPointerSubgraphBuilder> _builder;
 
     LLVMPointerAnalysisOptions createOptions(const char *entry_func,
-                                             uint64_t field_sensitivity)
+                                             uint64_t field_sensitivity,
+                                             bool threads = false)
     {
         LLVMPointerAnalysisOptions opts;
+        opts.threads = threads;
         opts.setFieldSensitivity(field_sensitivity);
         opts.setEntryFunction(entry_func);
         return opts;
+    }
+
+    const PointsToSetT& getUnknownPTSet() const {
+        static const PointsToSetT _unknownPTSet
+            = PointsToSetT({Pointer{analysis::pta::UNKNOWN_MEMORY, 0}});
+        return _unknownPTSet;
     }
 
 public:
 
     LLVMPointerAnalysis(const llvm::Module *m,
                         const char *entry_func = "main",
-                        uint64_t field_sensitivity = Offset::UNKNOWN)
-        : LLVMPointerAnalysis(m, createOptions(entry_func, field_sensitivity)) {}
+                        uint64_t field_sensitivity = Offset::UNKNOWN,
+                        bool threads = false)
+        : LLVMPointerAnalysis(m, createOptions(entry_func, field_sensitivity, threads)) {}
 
     LLVMPointerAnalysis(const llvm::Module *m, const LLVMPointerAnalysisOptions opts)
         : _builder(new LLVMPointerSubgraphBuilder(m, opts)) {}
 
-    PSNode *getPointsTo(const llvm::Value *val)
-    {
+    ///
+    // Get the node from pointer analysis that holds the points-to set.
+    // See: getLLVMPointsTo()
+    PSNode *getPointsTo(const llvm::Value *val) const {
         return _builder->getPointsTo(val);
+    }
+
+    ///
+    // Get the points-to information for the given LLVM value.
+    // The return object has methods begin(), end() that can be used
+    // for iteration over (llvm::Value *, Offset) pairs of the
+    // points-to set. Moreover, the object has methods hasUnknown()
+    // and hasNull() that reflect whether the points-to set of the
+    // LLVM value contains unknown element of null.
+    LLVMPointsToSet getLLVMPointsTo(const llvm::Value *val) {
+        if (auto node = getPointsTo(val))
+            return LLVMPointsToSet(node->pointsTo);
+        else
+            return LLVMPointsToSet(getUnknownPTSet());
+    }
+
+    ///
+    // This method is the same as getLLVMPointsTo, but it returns
+    // also the information whether the node of pointer analysis exists
+    // (opposed to the getLLVMPointsTo, which returns a set with
+    // unknown element when the node does not exists)
+    std::pair<bool, LLVMPointsToSet>
+    getLLVMPointsToChecked(const llvm::Value *val) {
+        if (auto node = getPointsTo(val))
+            return {true, LLVMPointsToSet(node->pointsTo)};
+        else
+            return {false, LLVMPointsToSet(getUnknownPTSet())};
+    }
+
+    std::vector<const llvm::Function *>
+    getPointsToFunctions(const llvm::Value *calledValue) const
+    {
+        std::vector<const llvm::Function *> functions;
+        for (auto node : _builder->getPointsToFunctions(calledValue)) {
+            functions.push_back(node->getUserData<llvm::Function>());
+        }
+        return functions;
+    }
+
+    std::map<PSNode *, analysis::pta::PSNodeJoin *> getJoins() const
+    {
+        return _builder->getJoins();
+    }
+
+    std::map<PSNode *, analysis::pta::PSNodeFork *> getForks() const
+    {
+        return _builder->getForks();
     }
 
     const std::unordered_map<const llvm::Value *, PSNodesSeq>&
