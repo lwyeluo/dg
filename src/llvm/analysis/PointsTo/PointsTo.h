@@ -96,7 +96,7 @@ public:
                          <<  F->getName() << "\n";
             assert(!validator.getErrors().empty());
             llvm::errs() << validator.getErrors();
-            abort();
+            //abort();
         }
 #endif // NDEBUG
 
