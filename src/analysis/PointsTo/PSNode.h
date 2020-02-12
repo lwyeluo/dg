@@ -274,7 +274,7 @@ public:
             default:
                 // this constructor is for the above mentioned types only
                 assert(0 && "Invalid type");
-                abort();
+                //abort();
         }
     }
 

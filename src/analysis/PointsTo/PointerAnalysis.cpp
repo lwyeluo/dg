@@ -153,7 +153,7 @@ bool PointerAnalysis::processMemcpy(PSNode *node)
         getMemoryObjects(node, ptr, srcObjects);
 
         if (srcObjects.empty()){
-            abort();
+            //abort();
             return changed;
         }
 
@@ -168,7 +168,7 @@ bool PointerAnalysis::processMemcpy(PSNode *node)
             getMemoryObjects(node, dptr, destObjects);
 
             if (destObjects.empty()) {
-                abort();
+                //abort();
                 return changed;
             }
 
